@@ -27,20 +27,20 @@ static constexpr gpio_num_t LCD_PIN_CLK { GPIO_NUM_7 }; // SCK
 
 static constexpr uint LCD_H_RES { 240 };
 static constexpr uint LCD_V_RES { 240 };
-static constexpr uint LCD_PIXEL_CLOCK_HZ { 20*1000*1000 };
+//static constexpr uint LCD_PIXEL_CLOCK_HZ { 20*1000*1000 };
+static constexpr uint LCD_PIXEL_CLOCK_HZ { 80*1000*1000 };
 static constexpr uint LCD_CMD_BITS { 8 };
 static constexpr uint LCD_PARAM_BITS { 8 };
 static constexpr uint32_t LCD_BK_LIGHT_ON_LEVEL { 1 };
 static constexpr uint32_t LCD_BK_LIGHT_OFF_LEVEL { !LCD_BK_LIGHT_ON_LEVEL };
 
-static constexpr uint LVGL_DRAW_BUFFER_ROWS { 40 };
+static constexpr uint LVGL_DRAW_BUFFER_ROWS { 80 };
+static constexpr uint LVGL_SPI_TRANSFER_ROWS { 96 };
 static constexpr uint LVGL_TICK_PERIOD_MS { 2 };
-static constexpr uint32_t LVGL_TASK_STACK_DEPTH { 8192 };
 
 
 static lv_disp_t *g_display = nullptr;
 static SemaphoreHandle_t g_display_sem = nullptr;
-static TaskHandle_t g_display_task = nullptr;
 static bool g_backlight = true;
 
 static bool on_color_trans_done(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_io_event_data_t *edata, void *user_ctx)
@@ -67,27 +67,26 @@ static void on_lvgl_drv_update(lv_disp_drv_t *drv)
 {
     esp_lcd_panel_handle_t panel_handle = static_cast<esp_lcd_panel_handle_t>(drv->user_data);
 
-    ESP_LOGI(TAG, "Drv Update %d", (int)drv->rotated);
     switch (drv->rotated) {
     case LV_DISP_ROT_NONE:
         // Rotate LCD display
         esp_lcd_panel_swap_xy(panel_handle, false);
-        esp_lcd_panel_mirror(panel_handle, false, false);
+        esp_lcd_panel_mirror(panel_handle, true, false);
         break;
     case LV_DISP_ROT_90:
         // Rotate LCD display
         esp_lcd_panel_swap_xy(panel_handle, true);
-        esp_lcd_panel_mirror(panel_handle, false, true);
+        esp_lcd_panel_mirror(panel_handle, true, true);
         break;
     case LV_DISP_ROT_180:
         // Rotate LCD display
         esp_lcd_panel_swap_xy(panel_handle, false);
-        esp_lcd_panel_mirror(panel_handle, true, true);
+        esp_lcd_panel_mirror(panel_handle, false, true);
         break;
     case LV_DISP_ROT_270:
         // Rotate LCD display
         esp_lcd_panel_swap_xy(panel_handle, true);
-        esp_lcd_panel_mirror(panel_handle, true, false);
+        esp_lcd_panel_mirror(panel_handle, false, false);
         break;
     }
 }
@@ -98,18 +97,6 @@ static void on_lvgl_tick(__unused void *arg)
     lv_tick_inc(LVGL_TICK_PERIOD_MS);
 }
 
-
-
-static void display_task(void *param) {
-    while (true) {
-        vTaskDelay(pdMS_TO_TICKS(10));
-        
-        if (display_acquire(pdMS_TO_TICKS(10))) {
-            lv_timer_handler();
-            display_release();
-        }
-    }
-}
 
 
 lv_disp_t *display_init()
@@ -139,7 +126,7 @@ lv_disp_t *display_init()
         .data5_io_num = -1,     ///< GPIO pin for spi data5 signal in octal mode, or -1 if not used.
         .data6_io_num = -1,     ///< GPIO pin for spi data6 signal in octal mode, or -1 if not used.
         .data7_io_num = -1,     ///< GPIO pin for spi data7 signal in octal mode, or -1 if not used.
-        .max_transfer_sz = LCD_H_RES * 80 * sizeof(uint16_t),  ///< Maximum transfer size, in bytes. Defaults to 4092 if 0 when DMA enabled, or to `SOC_SPI_MAXIMUM_BUFFER_SIZE` if DMA is disabled.
+        .max_transfer_sz = LCD_H_RES * LVGL_SPI_TRANSFER_ROWS * sizeof(uint16_t),  ///< Maximum transfer size, in bytes. Defaults to 4092 if 0 when DMA enabled, or to `SOC_SPI_MAXIMUM_BUFFER_SIZE` if DMA is disabled.
         .flags = 0,       ///< Abilities of bus to be checked by the driver. Or-ed value of ``SPICOMMON_BUSFLAG_*`` flags.
         .intr_flags = 0,       //< Interrupt flag for the bus to set the priority, and IRAM attribute, see
     };
@@ -185,8 +172,8 @@ lv_disp_t *display_init()
     ESP_ERROR_CHECK(esp_lcd_panel_reset(panel_handle));
     ESP_ERROR_CHECK(esp_lcd_panel_init(panel_handle));
     ESP_ERROR_CHECK(esp_lcd_panel_invert_color(panel_handle, true));
-        esp_lcd_panel_swap_xy(panel_handle, false);
-        esp_lcd_panel_mirror(panel_handle, true, false);
+    ESP_ERROR_CHECK(esp_lcd_panel_swap_xy(panel_handle, false));
+    ESP_ERROR_CHECK(esp_lcd_panel_mirror(panel_handle, true, false));
 
     // user can flush pre-defined pattern to the screen before we turn on the screen or backlight
     ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(panel_handle, true));
@@ -198,12 +185,18 @@ lv_disp_t *display_init()
 
     ESP_LOGI(TAG, "Initialize LVGL library");
     lv_init();
+
     // alloc draw buffers used by LVGL
     // it's recommended to choose the size of the draw buffer(s) to be at least 1/10 screen sized
+#if 0
     lv_color_t *buf1 = static_cast<lv_color_t*>(heap_caps_malloc(LCD_H_RES * LVGL_DRAW_BUFFER_ROWS * sizeof(lv_color_t), MALLOC_CAP_DMA));
     assert(buf1);
     lv_color_t *buf2 = static_cast<lv_color_t*>(heap_caps_malloc(LCD_H_RES * LVGL_DRAW_BUFFER_ROWS * sizeof(lv_color_t), MALLOC_CAP_DMA));
     assert(buf2);
+#else
+    DMA_ATTR static lv_color_t buf1[LCD_H_RES * LVGL_DRAW_BUFFER_ROWS];
+    DMA_ATTR static lv_color_t buf2[LCD_H_RES * LVGL_DRAW_BUFFER_ROWS];
+#endif
 
     // initialize LVGL draw buffers
     lv_disp_draw_buf_init(&disp_buf, buf1, buf2, LCD_H_RES * LVGL_DRAW_BUFFER_ROWS);
@@ -236,11 +229,6 @@ lv_disp_t *display_init()
     static StaticSemaphore_t sem_buffer;
     g_display_sem = xSemaphoreCreateBinaryStatic(&sem_buffer);
     xSemaphoreGive(g_display_sem);
-
-
-    static StaticTask_t task_buffer;
-    static StackType_t task_stack[LVGL_TASK_STACK_DEPTH];
-    g_display_task = xTaskCreateStatic(display_task, "lvgl_render", LVGL_TASK_STACK_DEPTH, &disp_drv, LVGL_TASK_PRIORITY, task_stack, &task_buffer);
 
     return g_display;
 }

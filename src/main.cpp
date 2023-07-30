@@ -1,6 +1,7 @@
 #include "projectconfig.h"
 
 #include <stdio.h>
+#include <time.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <esp_log.h>
@@ -10,6 +11,7 @@
 #include "wifi.h"
 #include "input.h"
 #include "console.h"
+#include "ui/ui.h"
 
 static constexpr char TAG[] = "main";
 
@@ -80,12 +82,36 @@ void example_lvgl_demo_ui()
 }
 
 
+#if 0
 static void on_input(void* arg, esp_event_base_t event_base, int32_t event_id, void *event_data)
 {
     input_event_data_t *data = static_cast<input_event_data_t*>(event_data);
     switch (event_id) {
         case EVENT_BUTTON_LEFT:
-            ESP_LOGI(TAG, "LEFT Button %s", data->long_press?"long":"short");
+            //ESP_LOGI(TAG, "LEFT Button %s", data->long_press?"long":"short");
+            if (!data->long_press) {
+                display_acquire();
+                switch (lv_disp_get_rotation(nullptr)) {
+                    case LV_DISP_ROT_NONE:
+                        ESP_LOGI(TAG, "Display rotate 90");
+                        lv_disp_set_rotation(nullptr, LV_DISP_ROT_90);
+                        break;
+                    case LV_DISP_ROT_90:
+                        ESP_LOGI(TAG, "Display rotate 180");
+                        lv_disp_set_rotation(nullptr, LV_DISP_ROT_180);
+                        break;
+                    case LV_DISP_ROT_180:
+                        ESP_LOGI(TAG, "Display rotate 270");
+                        lv_disp_set_rotation(nullptr, LV_DISP_ROT_270);
+                        break;
+                    case LV_DISP_ROT_270:
+                        ESP_LOGI(TAG, "Display rotate NONE");
+                        lv_disp_set_rotation(nullptr, LV_DISP_ROT_NONE);
+                        break;
+                }
+
+                display_release();
+            }
             break;
         case EVENT_BUTTON_RIGHT:
             ESP_LOGI(TAG, "RIGHT Button %s", data->long_press?"long":"short");
@@ -101,6 +127,43 @@ static void on_input(void* arg, esp_event_base_t event_base, int32_t event_id, v
             break;
     }
 }
+#endif
+
+
+static lv_timer_t *clock_timer;
+
+
+static void clock_timer_cb(lv_timer_t *timer)
+{
+    time_t now;
+    struct tm timeinfo;
+    char strftime_buf[64];
+    
+    time(&now);
+    localtime_r(&now, &timeinfo);
+
+    //ESP_LOGI(TAG, "Timer");
+    
+    strftime(strftime_buf, sizeof(strftime_buf), "%H:%M", &timeinfo);
+
+    lv_arc_set_value(ui_clock_seconds, timeinfo.tm_sec);
+    lv_label_set_text(ui_clock_label, strftime_buf);
+}
+
+void clock_loaded(lv_event_t * e)
+{
+    ESP_LOGI(TAG, "Clock loaded");
+
+    clock_timer_cb(nullptr);
+    clock_timer = lv_timer_create(clock_timer_cb, 200, nullptr);
+}
+
+void clock_unloaded(lv_event_t * e)
+{
+    ESP_LOGI(TAG, "Clock unloaded");
+
+    lv_timer_del(clock_timer);
+}
 
 
 
@@ -114,17 +177,22 @@ extern "C" void app_main()
 
     ESP_LOGI(TAG, "Display init");
     display_acquire();
-    example_lvgl_demo_ui();
+    ui_init();
+    //example_lvgl_demo_ui();
     display_release();
 
     console_init();
 
+
     ESP_LOGI(TAG, "Running");
 
-    app_event_handler_register(INPUT_EVENT, ESP_EVENT_ANY_ID, on_input, nullptr);
-
+    TickType_t lastWakeTime = xTaskGetTickCount();
     while (true) {
-        app_event_loop_run(pdMS_TO_TICKS(1000));
-        vTaskDelay(1);
+        if (display_acquire(pdMS_TO_TICKS(10))) {
+            lv_timer_handler();
+            //app_event_loop_run(pdMS_TO_TICKS(5));
+            display_release();
+        }
+        vTaskDelayUntil(&lastWakeTime, pdMS_TO_TICKS(1));
     }
 }

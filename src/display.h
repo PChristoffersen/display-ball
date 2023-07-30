@@ -11,3 +11,4 @@ bool display_get_backlight();
 
 bool display_acquire(TickType_t ticksToWait = portMAX_DELAY);
 void display_release();
+
